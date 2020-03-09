@@ -1,7 +1,7 @@
 """Support for Huawei inverter monitoring API."""
 import logging
 
-from huawei_solar import HuaweiSolar
+from huawei_solar import AsyncHuaweiSolar
 import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
@@ -38,23 +38,30 @@ ATTR_SYSTEM_TIME = "system_time"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({vol.Required(CONF_HOST): cv.string})
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Create the Huawei Solar monitoring API sensor."""
-    _LOGGER.debug("Setup Huawei Solar")
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+    """Create the sensor."""
+    _LOGGER.debug("Setup Huawei Inverter")
 
     host = config[CONF_HOST]
+    _LOGGER.debug("setup host")
 
     try:
-        inverter = HuaweiSolar(host)
-    except Exception as error:
-        _LOGGER.error("could not connect to Huawei inverter: %", error)
-        return False
+        _LOGGER.debug("setting up inverter")
+        import pdb
 
+        pdb.set_trace()
+        inverter = AsyncHuaweiSolar(host, loop=hass.loop)
+        _LOGGER.debug("setup inverter")
+    except Exception as ex:
+        _LOGGER.error("could not connect to Huawei inverter: %s", ex)
+        return False
+    _LOGGER.debug("created inverter")
     entities = []
 
     entities.append(HuaweiSolarSensor(inverter))
 
-    add_entities(entities)
+    async_add_entities(entities, True)
+    _LOGGER.debug("added entities")
 
 
 class HuaweiSolarSensor(Entity):
@@ -63,21 +70,18 @@ class HuaweiSolarSensor(Entity):
     def __init__(self, inverter):
         """Initialize the sensor."""
         self._inverter = inverter
-        self._name = self._inverter.get("model_name").value
-        self._model_id = self._inverter.get("model_id").value
-        self._serial_number = self._inverter.get("serial_number").value
-        self._nb_pv_strings = int(self._inverter.get("nb_pv_strings").value)
-        self._rated_power = self._inverter.get("rated_power").value
-        self._nb_optimizers = self._inverter.get("nb_optimizers").value
-        tmp = self._inverter.get("grid_code").value
-        self._grid_standard = tmp.standard
-        self._grid_country = tmp.country
         self._hidden = False
         self._unit = POWER_WATT
         self._icon = "mdi:solar-power"
-        self._pv_strings_voltage = [None] * self._nb_pv_strings
-        self._pv_strings_current = [None] * self._nb_pv_strings
         self._last_update = None
+        self._name = None
+        self._model_id = None
+        self._serial_number = None
+        self._nb_pv_strings = None
+        self._rated_power = None
+        self._nb_optimizers = None
+        self._grid_standard = None
+        self._grid_country = None
 
     @property
     def name(self):
@@ -92,7 +96,6 @@ class HuaweiSolarSensor(Entity):
     @property
     def state(self):
         """Return the state."""
-        return self._icon
         return self._state
 
     @property
@@ -122,9 +125,9 @@ class HuaweiSolarSensor(Entity):
             ATTR_NB_ONLINE_OPTIMIZERS: self._nb_online_optimizers,
             ATTR_SYSTEM_TIME: self._system_time,
         }
-        for i in range(self._nb_pv_strings):
-            attributes[f"pv_string_{i+1:02}_voltage"] = self._pv_strings_voltage[i]
-            attributes[f"pv_string_{i+1:02}_current"] = self._pv_strings_current[i]
+        # for i in range(int(self._nb_pv_strings)):
+        #    attributes[f"pv_string_{i+1:02}_voltage"] = self._pv_strings_voltage[i]
+        #    attributes[f"pv_string_{i+1:02}_current"] = self._pv_strings_current[i]
         return attributes
 
     @property
@@ -132,27 +135,63 @@ class HuaweiSolarSensor(Entity):
         """Return the unit of measurement."""
         return self._unit
 
-    def update(self):
-        """Update the sensor state and attributes."""
-        self._state = self._inverter.get("active_power").value
-        self._daily_yield = self._inverter.get("daily_yield_energy").value
-        self._total_yield = self._inverter.get("accumulated_yield_energy").value
-        self._reactive_power = self._inverter.get("reactive_power").value
-        self._power_factor = self._inverter.get("power_factor").value
-        self._efficiency = self._inverter.get("efficiency").value
-        self._grid_voltage = self._inverter.get("grid_voltage").value
-        self._grid_current = self._inverter.get("grid_current").value
-        self._grid_frequency = self._inverter.get("grid_frequency").value
-        self._startup_time = self._inverter.get("startup_time").value.time()
-        self._shutdown_time = self._inverter.get("shutdown_time").value.time()
-        self._internal_temperature = self._inverter.get("internal_temperature").value
-        self._device_status = self._inverter.get("device_status").value
-        self._nb_online_optimizers = self._inverter.get("nb_online_optimizers").value
-        self._day_active_power_peak = self._inverter.get("day_active_power_peak").value
-        for i in range(self._nb_pv_strings):
-            self._pv_strings_voltage[i] = self._inverter.get(
-                f"pv_{i+1:02}_voltage"
+    async def async_update(self):
+        """Get the latest data from the Huawei solar inverter."""
+        if self._name is None:
+            self._name = (await self._inverter.get("model_name")).value
+            _LOGGER.debug("set sensor name: %s", self._name)
+        if self._model_id is None:
+            self._model_id = (await self._inverter.get("model_id")).value
+            _LOGGER.debug("set model id: %s", self._model_id)
+        if self._serial_number is None:
+            self._serial_number = (await self._inverter.get("serial_number")).value
+            _LOGGER.debug("set serial number: %s", self._serial_number)
+        if self._nb_pv_strings is None:
+            self._nb_pv_strings = (await self._inverter.get("nb_pv_strings")).value
+            self._pv_strings_voltage = [None] * self._nb_pv_strings
+            self._pv_strings_current = [None] * self._nb_pv_strings
+            _LOGGER.debug(
+                "create pv strings list: %s, %s",
+                self._pv_strings_voltage,
+                self._pv_strings_current,
+            )
+        if self._rated_power is None:
+            self._rated_power = (await self._inverter.get("rated_power")).value
+            _LOGGER.debug("set rated power: %s", self._rated_power)
+        if self._nb_optimizers is None:
+            self._nb_optimizers = (await self._inverter.get("nb_optimizers")).value
+            _LOGGER.debug("set nb optimizers: %s", self._nb_optimizers)
+        if self._grid_standard is None:
+            tmp = (await self._inverter.get("grid_code")).value
+            self._grid_standard = tmp.standard
+            self._grid_country = tmp.country
+
+        self._state = (await self._inverter.get("active_power")).value
+        self._daily_yield = (await self._inverter.get("daily_yield_energy")).value
+        self._total_yield = (await self._inverter.get("accumulated_yield_energy")).value
+        self._reactive_power = (await self._inverter.get("reactive_power")).value
+        self._power_factor = (await self._inverter.get("power_factor")).value
+        self._efficiency = (await self._inverter.get("efficiency")).value
+        self._grid_voltage = (await self._inverter.get("grid_voltage")).value
+        self._grid_current = (await self._inverter.get("grid_current")).value
+        self._grid_frequency = (await self._inverter.get("grid_frequency")).value
+        self._startup_time = (await self._inverter.get("startup_time")).value.time()
+        self._shutdown_time = (await self._inverter.get("shutdown_time")).value.time()
+        self._system_time = (await self._inverter.get("system_time")).value
+        self._internal_temperature = (
+            await self._inverter.get("internal_temperature")
+        ).value
+        self._device_status = (await self._inverter.get("device_status")).value
+        self._nb_online_optimizers = (
+            await self._inverter.get("nb_online_optimizers")
+        ).value
+        self._day_active_power_peak = (
+            await self._inverter.get("day_active_power_peak")
+        ).value
+        for i in range(int(self._nb_pv_strings)):
+            self._pv_strings_voltage[i] = (
+                await self._inverter.get(f"pv_{i+1:02}_voltage")
             ).value
-            self._pv_strings_current[i] = self._inverter.get(
-                f"pv_{i+1:02}_current"
+            self._pv_strings_current[i] = (
+                await self._inverter.get(f"pv_{i+1:02}_current")
             ).value
